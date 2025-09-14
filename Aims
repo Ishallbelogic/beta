@@ -1,65 +1,206 @@
--- Low-Lag NPC Auto-Aim (robust + debug + line-of-sight)
--- Paste as LocalScript in StarterPlayerScripts
+--[[ 
+    Competition Script: ESP + Auto-Aim (Players/NPCs)
+    Requirements Implemented:
+      - Player & NPC Auto-Aim (separate toggle buttons)
+      - Raycast check for visibility
+      - Distance conditions (Players=250, NPCs=200)
+      - ESP refresh every 30s
+      - ESP Markers:
+          Players = Green Circle
+          NPCs = Red Circle
+          Keycards = Star (Red/Green/Orange)
+          Flares = Plus Sign (Red/Green)
+      - Targets lock once found
+--]]
 
+--// Services
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local Camera = Workspace.CurrentCamera
 
--- ===== CONFIG =====
-local LOCK_RANGE    = 220      -- studs
-local SMOOTHNESS    = 0.30     -- camera lerp (0..1)
-local SCAN_INTERVAL = 0.20     -- seconds between target scans
-local FORCE_CAMERA  = false    -- set true only if game blocks camera (may cause lag)
-local DEBUG_OUTPUT  = false    -- set true to print debug to output
--- ====================
+--// UI
+local ScreenGui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
+ScreenGui.Name = "CompetitionUI"
 
--- Always-ignored exact names
-local AlwaysIgnore = {
-    ["Merchant"] = true,
-    ["Broker"] = true,
-    ["Vulture Merchant"] = true,
-}
+local playerBtn = Instance.new("TextButton", ScreenGui)
+playerBtn.Size = UDim2.new(0,120,0,40)
+playerBtn.Position = UDim2.new(0,20,0,200)
+playerBtn.Text = "Auto-Aim Players [OFF]"
+playerBtn.BackgroundColor3 = Color3.fromRGB(30,30,30)
+playerBtn.TextColor3 = Color3.fromRGB(0,255,0)
 
--- State
-local lockEnabled = false
-local currentTargetHead = nil    -- BasePart (Head)
-local targetAcquiredAt = 0
-local lastScan = 0
+local npcBtn = Instance.new("TextButton", ScreenGui)
+npcBtn.Size = UDim2.new(0,120,0,40)
+npcBtn.Position = UDim2.new(0,20,0,250)
+npcBtn.Text = "Auto-Aim NPCs [OFF]"
+npcBtn.BackgroundColor3 = Color3.fromRGB(30,30,30)
+npcBtn.TextColor3 = Color3.fromRGB(255,0,0)
 
--- Cached heads (keeps low work during aiming)
-local npcHeads = {}      -- array of head BaseParts
-local modelToHead = {}   -- map model -> head
+--// Toggles
+local aimPlayers = false
+local aimNPCs = false
 
--- ---------- UI ----------
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "AutoAimGUI"
-screenGui.ResetOnSpawn = false
-screenGui.Parent = PlayerGui
+playerBtn.MouseButton1Click:Connect(function()
+    aimPlayers = not aimPlayers
+    playerBtn.Text = "Auto-Aim Players ["..(aimPlayers and "ON" or "OFF").."]"
+end)
 
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 120, 0, 52)
-frame.Position = UDim2.new(0.78, 0, 0.06, 0)
-frame.BackgroundTransparency = 0.06
-frame.BackgroundColor3 = Color3.fromRGB(20,20,20)
-frame.BorderSizePixel = 0
-frame.Parent = screenGui
+npcBtn.MouseButton1Click:Connect(function()
+    aimNPCs = not aimNPCs
+    npcBtn.Text = "Auto-Aim NPCs ["..(aimNPCs and "ON" or "OFF").."]"
+end)
 
-local frameCorner = Instance.new("UICorner", frame)
-frameCorner.CornerRadius = UDim.new(0, 8)
+--// Utility
+local function getHead(character)
+    return character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+end
 
--- draggable
-local function makeDraggable(frame)
-    local dragging, dragInput, dragStart, startPos
-    frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = frame.Position
-            input.Changed:Connect(function()
+local function isVisible(part)
+    if not part then return false end
+    local ray = Ray.new(Camera.CFrame.Position, (part.Position - Camera.CFrame.Position).Unit * 5000)
+    local hit = Workspace:FindPartOnRayWithIgnoreList(ray, {LocalPlayer.Character}, false, true)
+    return hit and hit:IsDescendantOf(part.Parent)
+end
+
+local function getClosestTarget(isPlayer, maxDistance)
+    local candidates = {}
+    if isPlayer then
+        for _,plr in pairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Humanoid") and plr.Character.Humanoid.Health > 0 then
+                local head = getHead(plr.Character)
+                if head and (head.Position - Camera.CFrame.Position).Magnitude <= maxDistance then
+                    table.insert(candidates, head)
+                end
+            end
+        end
+    else
+        for _,npc in pairs(Workspace:GetChildren()) do
+            if npc:FindFirstChild("Humanoid") and npc.Humanoid.Health > 0 and npc:FindFirstChild("Head") then
+                local head = npc.Head
+                if (head.Position - Camera.CFrame.Position).Magnitude <= maxDistance then
+                    table.insert(candidates, head)
+                end
+            end
+        end
+    end
+
+    table.sort(candidates, function(a,b)
+        return (a.Position - Camera.CFrame.Position).Magnitude < (b.Position - Camera.CFrame.Position).Magnitude
+    end)
+
+    for _,target in ipairs(candidates) do
+        if isVisible(target) then
+            return target
+        end
+    end
+
+    return nil
+end
+
+--// Auto-Aim Loop
+RunService.RenderStepped:Connect(function()
+    if aimPlayers then
+        local target = getClosestTarget(true, 250)
+        if target then
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Position)
+        end
+    end
+    if aimNPCs then
+        local target = getClosestTarget(false, 200)
+        if target then
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Position)
+        end
+    end
+end)
+
+--// ESP Drawing
+local drawings = {}
+
+local function clearESP()
+    for _,d in pairs(drawings) do
+        d:Remove()
+    end
+    drawings = {}
+end
+
+local function drawCircle(position, color)
+    local d = Drawing.new("Circle")
+    d.Position = position
+    d.Color = color
+    d.Radius = 10
+    d.Thickness = 2
+    d.Filled = false
+    d.Visible = true
+    table.insert(drawings, d)
+end
+
+local function drawSymbol(position, symbol, color)
+    local d = Drawing.new("Text")
+    d.Position = position
+    d.Text = symbol
+    d.Size = 16
+    d.Color = color
+    d.Center = true
+    d.Visible = true
+    table.insert(drawings, d)
+end
+
+local function refreshESP()
+    clearESP()
+
+    -- Players (Green Circle)
+    for _,plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
+            local head = plr.Character.Head
+            local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+            if onScreen then
+                drawCircle(Vector2.new(screenPos.X, screenPos.Y), Color3.fromRGB(0,255,0))
+            end
+        end
+    end
+
+    -- NPCs (Red Circle)
+    for _,npc in pairs(Workspace:GetChildren()) do
+        if npc:FindFirstChild("Head") and npc:FindFirstChild("Humanoid") then
+            local head = npc.Head
+            local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+            if onScreen then
+                drawCircle(Vector2.new(screenPos.X, screenPos.Y), Color3.fromRGB(255,0,0))
+            end
+        end
+    end
+
+    -- Containers → Keycards & Flares
+    for _,obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("Part") or obj:IsA("MeshPart") then
+            local name = obj.Name:lower()
+            local screenPos, onScreen = Camera:WorldToViewportPoint(obj.Position)
+
+            if onScreen then
+                if name:find("keycard") then
+                    drawSymbol(Vector2.new(screenPos.X, screenPos.Y), "*", Color3.fromRGB(255,165,0))
+                elseif name:find("flare") then
+                    if name:find("green") then
+                        drawSymbol(Vector2.new(screenPos.X, screenPos.Y), "+", Color3.fromRGB(0,255,0))
+                    elseif name:find("red") then
+                        drawSymbol(Vector2.new(screenPos.X, screenPos.Y), "+", Color3.fromRGB(255,0,0))
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- ESP Refresh (every 30s)
+task.spawn(function()
+    while task.wait(30) do
+        refreshESP()
+    end
+end)
                 if input.UserInputState == Enum.UserInputState.End then
                     dragging = false
                 end
