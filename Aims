@@ -1,454 +1,81 @@
---[[ 
-    Competition Script: ESP + Auto-Aim (Players/NPCs)
-    Requirements Implemented:
-      - Player & NPC Auto-Aim (separate toggle buttons)
-      - Raycast check for visibility
-      - Distance conditions (Players=250, NPCs=200)
-      - ESP refresh every 30s
-      - ESP Markers:
-          Players = Green Circle
-          NPCs = Red Circle
-          Keycards = Star (Red/Green/Orange)
-          Flares = Plus Sign (Red/Green)
-      - Targets lock once found
---]]
+--!strict
+-- This script provides the core logic for an NPC to find a target and aim at its head.
+-- You will need to customize it to fit your specific NPC and game.
 
---// Services
-local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
-local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
+local NPC = script.Parent
+local NPC_Humanoid = NPC:FindFirstChildOfClass("Humanoid")
+local NPC_Head = NPC:FindFirstChild("Head")
+local NPC_Torso = NPC:FindFirstChild("Torso")
 
---// UI
-local ScreenGui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
-ScreenGui.Name = "CompetitionUI"
+-- The 'Neck' Motor6D is crucial for head rotation.
+local Neck = NPC_Torso:FindFirstChild("Neck")
 
-local playerBtn = Instance.new("TextButton", ScreenGui)
-playerBtn.Size = UDim2.new(0,120,0,40)
-playerBtn.Position = UDim2.new(0,20,0,200)
-playerBtn.Text = "Auto-Aim Players [OFF]"
-playerBtn.BackgroundColor3 = Color3.fromRGB(30,30,30)
-playerBtn.TextColor3 = Color3.fromRGB(0,255,0)
+-- The maximum distance the NPC can "see" a player.
+local MAX_RANGE = 50 
 
-local npcBtn = Instance.new("TextButton", ScreenGui)
-npcBtn.Size = UDim2.new(0,120,0,40)
-npcBtn.Position = UDim2.new(0,20,0,250)
-npcBtn.Text = "Auto-Aim NPCs [OFF]"
-npcBtn.BackgroundColor3 = Color3.fromRGB(30,30,30)
-npcBtn.TextColor3 = Color3.fromRGB(255,0,0)
+-- The part on the NPC that should be doing the aiming (e.g., a weapon, a specific arm part).
+-- For this example, we'll just aim with the NPC's torso CFrame.
+-- You would replace this with your actual weapon part.
+local AIMING_PART = NPC_Torso
 
---// Toggles
-local aimPlayers = false
-local aimNPCs = false
+-- We'll use this to prevent the raycast from hitting the NPC itself.
+local raycastParams = RaycastParams.new()
+raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+raycastParams.FilterDescendantsInstances = {NPC}
 
-playerBtn.MouseButton1Click:Connect(function()
-    aimPlayers = not aimPlayers
-    playerBtn.Text = "Auto-Aim Players ["..(aimPlayers and "ON" or "OFF").."]"
-end)
+-- Main loop to handle targeting and aiming.
+RunService.Heartbeat:Connect(function()
+	if not NPC_Humanoid or not NPC_Head or not AIMING_PART or not Neck then
+		return
+	end
 
-npcBtn.MouseButton1Click:Connect(function()
-    aimNPCs = not aimNPCs
-    npcBtn.Text = "Auto-Aim NPCs ["..(aimNPCs and "ON" or "OFF").."]"
-end)
+	local closestPlayer = nil
+	local closestDistance = MAX_RANGE
 
---// Utility
-local function getHead(character)
-    return character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
-end
+	-- Find the closest player to the NPC.
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		if character and character:FindFirstChildOfClass("Humanoid") and character:FindFirstChild("HumanoidRootPart") then
+			local distance = (NPC.HumanoidRootPart.Position - character.HumanoidRootPart.Position).Magnitude
+			if distance < closestDistance then
+				closestDistance = distance
+				closestPlayer = player
+			end
+		end
+	end
 
-local function isVisible(part)
-    if not part then return false end
-    local ray = Ray.new(Camera.CFrame.Position, (part.Position - Camera.CFrame.Position).Unit * 5000)
-    local hit = Workspace:FindPartOnRayWithIgnoreList(ray, {LocalPlayer.Character}, false, true)
-    return hit and hit:IsDescendantOf(part.Parent)
-end
+	-- If a player is found, proceed with aiming.
+	if closestPlayer then
+		local targetCharacter = closestPlayer.Character
+		local targetHead = targetCharacter:FindFirstChild("Head")
 
-local function getClosestTarget(isPlayer, maxDistance)
-    local candidates = {}
-    if isPlayer then
-        for _,plr in pairs(Players:GetPlayers()) do
-            if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Humanoid") and plr.Character.Humanoid.Health > 0 then
-                local head = getHead(plr.Character)
-                if head and (head.Position - Camera.CFrame.Position).Magnitude <= maxDistance then
-                    table.insert(candidates, head)
-                end
-            end
-        end
-    else
-        for _,npc in pairs(Workspace:GetChildren()) do
-            if npc:FindFirstChild("Humanoid") and npc.Humanoid.Health > 0 and npc:FindFirstChild("Head") then
-                local head = npc.Head
-                if (head.Position - Camera.CFrame.Position).Magnitude <= maxDistance then
-                    table.insert(candidates, head)
-                end
-            end
-        end
-    end
+		if targetHead then
+			local npcToTargetVector = targetHead.Position - NPC_Head.Position
+			local rayDirection = npcToTargetVector.Unit * closestDistance
 
-    table.sort(candidates, function(a,b)
-        return (a.Position - Camera.CFrame.Position).Magnitude < (b.Position - Camera.CFrame.Position).Magnitude
-    end)
+			-- Perform a raycast to check for a clear line of sight.
+			local raycastResult = Workspace:Raycast(NPC_Head.Position, rayDirection, raycastParams)
 
-    for _,target in ipairs(candidates) do
-        if isVisible(target) then
-            return target
-        end
-    end
+			-- Check if the raycast hit the target's head.
+			if raycastResult and raycastResult.Instance.Parent == targetCharacter then
+				
+				-- Line of sight is clear. Now, aim the NPC's head and torso.
+				
+				-- Aim the NPC's head by adjusting the Neck Motor6D C0.
+				-- This gives a realistic head-tracking effect.
+				local headAimCFrame = CFrame.lookAt(Neck.C0.Position, targetHead.Position)
+				Neck.C0 = Neck.C0:Lerp(headAimCFrame, 0.5) -- Using Lerp for smoother movement
+				
+				-- Aim the main body part (e.g., torso) at the target's head.
+				-- You could also use a different aiming part, like a weapon.
+				local torsoAimCFrame = CFrame.lookAt(AIMING_PART.Position, targetHead.Position)
+				AIMING_PART.CFrame = torsoAimCFrame
 
-    return nil
-end
-
---// Auto-Aim Loop
-RunService.RenderStepped:Connect(function()
-    if aimPlayers then
-        local target = getClosestTarget(true, 250)
-        if target then
-            Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Position)
-        end
-    end
-    if aimNPCs then
-        local target = getClosestTarget(false, 200)
-        if target then
-            Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Position)
-        end
-    end
-end)
-
---// ESP Drawing
-local drawings = {}
-
-local function clearESP()
-    for _,d in pairs(drawings) do
-        d:Remove()
-    end
-    drawings = {}
-end
-
-local function drawCircle(position, color)
-    local d = Drawing.new("Circle")
-    d.Position = position
-    d.Color = color
-    d.Radius = 10
-    d.Thickness = 2
-    d.Filled = false
-    d.Visible = true
-    table.insert(drawings, d)
-end
-
-local function drawSymbol(position, symbol, color)
-    local d = Drawing.new("Text")
-    d.Position = position
-    d.Text = symbol
-    d.Size = 16
-    d.Color = color
-    d.Center = true
-    d.Visible = true
-    table.insert(drawings, d)
-end
-
-local function refreshESP()
-    clearESP()
-
-    -- Players (Green Circle)
-    for _,plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
-            local head = plr.Character.Head
-            local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-            if onScreen then
-                drawCircle(Vector2.new(screenPos.X, screenPos.Y), Color3.fromRGB(0,255,0))
-            end
-        end
-    end
-
-    -- NPCs (Red Circle)
-    for _,npc in pairs(Workspace:GetChildren()) do
-        if npc:FindFirstChild("Head") and npc:FindFirstChild("Humanoid") then
-            local head = npc.Head
-            local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-            if onScreen then
-                drawCircle(Vector2.new(screenPos.X, screenPos.Y), Color3.fromRGB(255,0,0))
-            end
-        end
-    end
-
-    -- Containers → Keycards & Flares
-    for _,obj in pairs(Workspace:GetDescendants()) do
-        if obj:IsA("Part") or obj:IsA("MeshPart") then
-            local name = obj.Name:lower()
-            local screenPos, onScreen = Camera:WorldToViewportPoint(obj.Position)
-
-            if onScreen then
-                if name:find("keycard") then
-                    drawSymbol(Vector2.new(screenPos.X, screenPos.Y), "*", Color3.fromRGB(255,165,0))
-                elseif name:find("flare") then
-                    if name:find("green") then
-                        drawSymbol(Vector2.new(screenPos.X, screenPos.Y), "+", Color3.fromRGB(0,255,0))
-                    elseif name:find("red") then
-                        drawSymbol(Vector2.new(screenPos.X, screenPos.Y), "+", Color3.fromRGB(255,0,0))
-                    end
-                end
-            end
-        end
-    end
-end
-
--- ESP Refresh (every 30s)
-task.spawn(function()
-    while task.wait(30) do
-        refreshESP()
-    end
-end)
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
-        end
-    end)
-    frame.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-            dragInput = input
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and input == dragInput then
-            local delta = input.Position - dragStart
-            frame.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-            )
-        end
-    end)
-end
-makeDraggable(frame)
-
-local btn = Instance.new("TextButton")
-btn.Size = UDim2.new(1, -12, 0, 36)
-btn.Position = UDim2.new(0, 6, 0, 6)
-btn.BackgroundColor3 = Color3.fromRGB(50,50,50)
-btn.TextColor3 = Color3.fromRGB(255,255,255)
-btn.TextScaled = true
-btn.Text = "Lock: OFF"
-btn.Parent = frame
-local btnCorner = Instance.new("UICorner", btn); btnCorner.CornerRadius = UDim.new(0,8)
-
-local status = Instance.new("TextLabel")
-status.Size = UDim2.new(1, -12, 0, 14)
-status.Position = UDim2.new(0, 6, 0, 42)
-status.BackgroundTransparency = 1
-status.TextColor3 = Color3.fromRGB(210,210,210)
-status.TextScaled = true
-status.Text = "Target: None"
-status.Parent = frame
-
-btn.MouseButton1Click:Connect(function()
-    lockEnabled = not lockEnabled
-    btn.Text = "Lock: " .. (lockEnabled and "ON" or "OFF")
-    btn.BackgroundColor3 = lockEnabled and Color3.fromRGB(30,140,30) or Color3.fromRGB(140,30,30)
-    if not lockEnabled then
-        currentTargetHead = nil
-        status.Text = "Target: None"
-        if FORCE_CAMERA then
-            pcall(function() workspace.CurrentCamera.CameraType = Enum.CameraType.Custom end)
-        end
-    else
-        if FORCE_CAMERA then
-            pcall(function() workspace.CurrentCamera.CameraType = Enum.CameraType.Scriptable end)
-        end
-    end
-end)
-
--- ---------- NPC cache helpers ----------
-local function isIgnoredModel(model)
-    if not model or not model:IsA("Model") then return true end
-    if AlwaysIgnore[model.Name] then return true end
-    local hum = model:FindFirstChildOfClass("Humanoid")
-    if not hum then return true end
-    if Players:GetPlayerFromCharacter(model) then return true end
-    return false
-end
-
-local function addModelIfNPC(model)
-    if not model or not model:IsA("Model") then return end
-    if isIgnoredModel(model) then return end
-    local head = model:FindFirstChild("Head")
-    if head and head:IsA("BasePart") then
-        if not modelToHead[model] then
-            modelToHead[model] = head
-            table.insert(npcHeads, head)
-            if DEBUG_OUTPUT then print("[AutoAim] Cached NPC:", model.Name) end
-        end
-    end
-end
-
-local function removeModelFromCache(model)
-    local head = modelToHead[model]
-    if head then
-        modelToHead[model] = nil
-        for i = #npcHeads, 1, -1 do
-            if npcHeads[i] == head then
-                table.remove(npcHeads, i)
-                break
-            end
-        end
-        if DEBUG_OUTPUT then print("[AutoAim] Removed NPC:", model.Name) end
-    end
-end
-
--- initial scan
-task.spawn(function()
-    for _, inst in ipairs(workspace:GetDescendants()) do
-        if inst:IsA("Model") then
-            task.defer(function() addModelIfNPC(inst) end)
-        end
-    end
-end)
-
-workspace.DescendantAdded:Connect(function(inst)
-    local m = inst
-    while m and not m:IsA("Model") do m = m.Parent end
-    if m then task.defer(function() addModelIfNPC(m) end) end
-end)
-workspace.DescendantRemoving:Connect(function(inst)
-    local m = inst
-    while m and not m:IsA("Model") do m = m.Parent end
-    if m then removeModelFromCache(m) end
-end)
-
-local function cleanStale()
-    for i = #npcHeads, 1, -1 do
-        local h = npcHeads[i]
-        if not h or not h.Parent or not h:IsA("BasePart") then
-            table.remove(npcHeads, i)
-        end
-    end
-end
-
--- ---------- LINE-OF-SIGHT CHECK ----------
-local function isVisible(head)
-    local cameraPos = workspace.CurrentCamera.CFrame.Position
-    local direction = head.Position - cameraPos
-    local raycastParams = RaycastParams.new()
-    raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
-    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-
-    local result = workspace:Raycast(cameraPos, direction, raycastParams)
-    if result then
-        return result.Instance:IsDescendantOf(head.Parent)
-    else
-        return true
-    end
-end
-
--- get nearest head
-local function getNearestHeadExcluding(excludeHead)
-    cleanStale()
-    local char = LocalPlayer and LocalPlayer.Character
-    if not char then return nil, math.huge end
-    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
-    if not root then return nil, math.huge end
-    local pos = root.Position
-    local best, bestDist = nil, math.huge
-    for i = 1, #npcHeads do
-        local head = npcHeads[i]
-        if head and head.Parent and head:IsA("BasePart") then
-            local model = head.Parent
-            if not isIgnoredModel(model) then
-                local hum = model:FindFirstChildOfClass("Humanoid")
-                if hum and hum.Health > 0 then
-                    if head ~= excludeHead and isVisible(head) then
-                        local d = (head.Position - pos).Magnitude
-                        if d < bestDist and d <= LOCK_RANGE then
-                            best, bestDist = head, d
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return best, bestDist
-end
-
-local function getNearestHead()
-    return getNearestHeadExcluding(nil)
-end
-
--- ---------- MAIN AIM LOOP ----------
-local accumulator = 0
-RunService.RenderStepped:Connect(function(dt)
-    local Camera = workspace.CurrentCamera
-    if not Camera then return end
-
-    if not lockEnabled then return end
-    if not LocalPlayer or not LocalPlayer.Character then
-        status.Text = "No character"
-        return
-    end
-
-    accumulator = accumulator + dt
-    if accumulator >= SCAN_INTERVAL then
-        accumulator = 0
-
-        -- acquire target if none
-        if not currentTargetHead then
-            local newHead = getNearestHead()
-            if newHead then
-                currentTargetHead = newHead
-                targetAcquiredAt = tick()
-                if DEBUG_OUTPUT then print("[AutoAim] Acquired:", newHead.Parent and newHead.Parent.Name) end
-            end
-        else
-            -- validate current target
-            local model = currentTargetHead.Parent
-            local valid = false
-            if currentTargetHead and currentTargetHead.Parent and currentTargetHead:IsA("BasePart") and model then
-                if not isIgnoredModel(model) then
-                    local hum = model:FindFirstChildOfClass("Humanoid")
-                    if hum and hum.Health > 0 then
-                        local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character:FindFirstChild("Head")
-                        if root then
-                            local d = (currentTargetHead.Position - root.Position).Magnitude
-                            if d <= LOCK_RANGE and isVisible(currentTargetHead) then
-                                valid = true
-                            end
-                        end
-                    end
-                end
-            end
-
-            -- if invalid, pick a new
-            if not valid then
-                currentTargetHead = nil
-                local newHead = getNearestHead()
-                if newHead then
-                    currentTargetHead = newHead
-                    targetAcquiredAt = tick()
-                    if DEBUG_OUTPUT then print("[AutoAim] Switched to:", newHead.Parent and newHead.Parent.Name) end
-                end
-            end
-        end
-    end
-
-    -- aim every frame
-    if currentTargetHead and currentTargetHead.Parent then
-        local camPos = Camera.CFrame.Position
-        local targetPos = currentTargetHead.Position + Vector3.new(0, 0.08, 0)
-        local desired = CFrame.new(camPos, targetPos)
-        pcall(function()
-            Camera.CFrame = Camera.CFrame:Lerp(desired, SMOOTHNESS)
-        end)
-
-        if status then
-            local name = (currentTargetHead.Parent and currentTargetHead.Parent.Name) or "NPC"
-            local root = LocalPlayer.Character and (LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character:FindFirstChild("Head"))
-            local dist = root and (currentTargetHead.Position - root.Position).Magnitude or 0
-            status.Text = string.format("%s (%.1fm)  •  Cached:%d", name, math.floor(dist*10)/10, #npcHeads)
-        end
-    else
-        if status then
-            status.Text = string.format("Target: None  •  Cached:%d", #npcHeads)
-        end
-    end
+			end
+		end
+	end
 end)
